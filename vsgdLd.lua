@@ -47,7 +47,7 @@
 
 function vsgdLd(opfunc3, theta, state)
 
-   local trace = false
+   local trace = true
 
    if trace then
       print('opfunc3', opfunc3)
@@ -88,7 +88,7 @@ function vsgdLd(opfunc3, theta, state)
       assert(state.c > 0)
    end
    
-   -- component wise maximum of scalar and Tensor
+   -- return component wise maximum of scalar and Tensor
    local function max(epsilon, t)
       local n = t:size(1)
       local result = torch.Tensor(n)
@@ -180,6 +180,12 @@ function vsgdLd(opfunc3, theta, state)
 
    -- 2. compute gradient and diagonal hessian
    f, gradient, hessdiag = opfunc3(state.j)
+   if trace then
+      print('at sample')
+      print(' f', f)
+      print(' gradient', gradient)
+      print(' hessdiag', hessdiag)
+   end
 
    -- 3. update moving average of g, v, h
    local one = torch.Tensor(d):fill(1)
@@ -198,17 +204,38 @@ function vsgdLd(opfunc3, theta, state)
       torch.cmul(oneMinusOneOverTau, state.h) + torch.cmul(oneOverTau,
                                                            max(state.epsilon,
                                                                hessdiag))
+   if trace then
+      print('updated rates')
+      print('g', state.g)
+      print('v', state.v)
+      print('h', state.h)
+   end
 
    -- 4. estimate new best learning rate
-   local gg = torch.cmul(state.g, state.g)
-   local hv = torch.cmul(state.h, state.v)
-   state.eta = torch.cdiv(gg, hv)
+   local gg = torch.dot(state.g, state.g)
+   local hv = torch.dot(state.h, state.v)
+   state.eta = gg / hv
+   if trace then
+      print('gg', gg)
+      print('hv', hv)
+      print('eta', state.eta)
+   end
 
    -- 5. take a stochastic gradient step
+   if trace then
+      print('theta before step', theta)
+   end
    theta = theta:add(-state.eta, gradient)
+   if trace then
+      print('theta after step', theta)
+      halt()
+   end
+
       
    -- 6. update memory size
 
+   -- THIS UPDATE IS SUSPECT AS IT CHANGES THE DIMENSIONS FROM A SCALAR
+   -- TO A VECTOR
    state.tau = 
       torch.cmul(one - torch.cdiv(gg, state.v), state.tau) + one
 
