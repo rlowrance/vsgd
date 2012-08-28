@@ -45,7 +45,7 @@
 -- For now, do not implement the momentum or weight decay features of
 -- Koray's code
 
-function sgdSZL(opfunc3, theta, state)
+function vsgdLd(opfunc3, theta, state)
 
    local trace = false
 

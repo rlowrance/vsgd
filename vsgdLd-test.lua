@@ -22,7 +22,7 @@ local function assertEqTensor(actual, expected1, expected2, tol)
 end
 
 -- function is from Heath, Scientific Computing, p. 282
--- f(x) = 0.5 x_1^2 + 2.5 x_2^2
+-- f(x1 \, x2) = 0.5 x_1^2 + 2.5 x_2^2
 -- the minizer is at the origin [0 0]^T
 do 
    local function heath(x)
@@ -85,7 +85,7 @@ function test.heathTestKnownResults()
          print('theta before call sgdSZL', theta)
       end
 
-      local theta, seq = sgdSZL(heathOpfunc3, theta, state)
+      local theta, seq = vsgdLd(heathOpfunc3, theta, state)
 
       if trace then
          print('i', i)
@@ -105,6 +105,7 @@ function test.heathTestKnownResults()
          assertEqTensor(theta, 0.0438, 0.0975, tol)
          tester:asserteq(1, #seq, '1 element')
          tester:asserteq(3, seq[1], 'value should be 3')
+         halt()
       end
    end
 end
