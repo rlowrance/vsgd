@@ -1,10 +1,15 @@
--- sgdSZL.lua
+-- sgdLd.lua
 -- stochastic gradient descent using the Schaul-Zhang-LeCun procedure to
 -- approximate the optimal learning rate and learning rate decay using
--- adaptive component-wise learning rates
--- ref: schaul-12 learning rates.pdf
+-- adaptive component-wise learning rates.
 
--- somewhat mimic the stochastic gradient optimization code from Koray
+-- This version implements local gradient variance terms:
+--    eta_i = (g_i)^2 / (h_i . v_i)
+
+-- ref: schaul-12 learning rates.pdf. This code implements algorithm 1 in 
+-- the paper
+
+-- mimic the stochastic gradient optimization code from Koray
 -- ref: https://github.com/koraykv/optim/blob/master/sgd.lua
 
 -- ARGS:
@@ -50,42 +55,45 @@ function sgdSZL(opfunc3, theta, state)
       print('state', state)
    end
 
-   -- type and value check the arguments
+   -- type and value check the arguments on first call only
 
    local function assertIsTensor1D(x)
       assert(string.match(torch.typename(x), 'torch%..*Tensor'))
       assert(x:dim() == 1)
    end
 
-   assert(opfunc3)
-   assert(type(opfunc3) == 'function')
-
-   assert(theta)
-   assertIsTensor1D(theta)
-   assert(theta:dim() == 1)
-
-   assert(type(state) == 'table')
-
-   assert(state.epsilon)
-   assert(state.epsilon > 0)
-
-   assert(state.nSamples)
-   assert(state.nSamples >= 1)
-   assert(math.floor(state.nSamples) == state.nSamples) -- is integer
-
-   assert(state.n0)
-   assert(state.n0 >= 1)
-   assert(math.floor(state.n0) == state.n0)  -- is integer
-
-   assert(state.c)
-   assert(state.c > 0)
-
-   -- component wise minimum of scalar and Tensor
-   local function min(epsilon, t)
+   if state.tau == nil then
+      
+      assert(opfunc3)
+      assert(type(opfunc3) == 'function')
+      
+      assert(theta)
+      assertIsTensor1D(theta)
+      assert(theta:dim() == 1)
+      
+      assert(type(state) == 'table')
+      
+      assert(state.epsilon)
+      assert(state.epsilon > 0)
+      
+      assert(state.nSamples)
+      assert(state.nSamples >= 1)
+      assert(math.floor(state.nSamples) == state.nSamples) -- is integer
+      
+      assert(state.n0)
+      assert(state.n0 >= 1)
+      assert(math.floor(state.n0) == state.n0)  -- is integer
+      
+      assert(state.c)
+      assert(state.c > 0)
+   end
+   
+   -- component wise maximum of scalar and Tensor
+   local function max(epsilon, t)
       local n = t:size(1)
       local result = torch.Tensor(n)
       for i = 1, n do
-         result[i] = math.min(epsilon, t[i])
+         result[i] = math.max(epsilon, t[i])
       end
       return result
    end
@@ -137,7 +145,7 @@ function sgdSZL(opfunc3, theta, state)
    
       state.g = sumGradients / n0
       state.v = (sumVariances / n0) * c
-      state.h = min(state.epsilon, (sumHessdiags / n0) * c)
+      state.h = max(state.epsilon, (sumHessdiags / n0) * c)
       
       if trace then
          print('initialized values')
@@ -145,7 +153,7 @@ function sgdSZL(opfunc3, theta, state)
          print('v', state.v)
          print('h', state.h)
       end
-      end -- first-time initialization
+   end -- first-time initialization
 
    -- perform update:
    -- 1. draw sample
@@ -185,10 +193,10 @@ function sgdSZL(opfunc3, theta, state)
       torch.cmul(oneMinusOneOverTau, state.v) + torch.cmul(oneOverTau,
                                                            torch.cmul(gradient,
                                                                       gradient))
+      
    state.h = 
       torch.cmul(oneMinusOneOverTau, state.h) + torch.cmul(oneOverTau,
-                                                           min(state.epsilon,
-
+                                                           max(state.epsilon,
                                                                hessdiag))
 
    -- 4. estimate new best learning rate

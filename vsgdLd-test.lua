@@ -22,6 +22,8 @@ local function assertEqTensor(actual, expected1, expected2, tol)
 end
 
 -- function is from Heath, Scientific Computing, p. 282
+-- f(x) = 0.5 x_1^2 + 2.5 x_2^2
+-- the minizer is at the origin [0 0]^T
 do 
    local function heath(x)
       local x1 = x[1]
@@ -34,6 +36,10 @@ do
                                 {3, 3}})
    
    function heathOpfunc3(j)
+      local trace = false
+      if trace then
+         print('heathOpfunc3 j', j)
+      end
       assert(1 <= j and j <= heathSamples:size(1))
       local x = heathSamples[j]
       local x1 = x[1]
@@ -96,7 +102,7 @@ function test.heathTestKnownResults()
          assertEqTensor(state.tau, 3.5614, 3.5614)
          print('theta', theta)
          local tol = 1 -- value are about 10^9
-         assertEqTensor(theta, 0.0438, 0.0975 x, tol)
+         assertEqTensor(theta, 0.0438, 0.0975, tol)
          tester:asserteq(1, #seq, '1 element')
          tester:asserteq(3, seq[1], 'value should be 3')
       end
@@ -117,7 +123,7 @@ function test.heathMinimizer()
    -- attempt to minimize
    local d = heathSamples:size(2)
    local theta = torch.randn(d)
-   for i = 1, 25 do
+   for i = 1, 100 do
       theta, seq = sgdSZL(heathOpfunc3, theta, state)
       if false then
          print('theta', theta)
@@ -205,13 +211,11 @@ end
 -- main
 --------------------------------------------------------------------------------
 
-oneTest = test.heathTestKnownResults
-if oneTest then
-   for k, v in oneTest do
-      tester:add({v})
-      tester:run()
-   end
+if true then
+   tester:add(test.heathTestKnownResults, 'test.heathTestKnownResults')
+   --tester:add(test.heathMinimizer, 'test.heathMinimizer')
 else
-   tester:add(test)
-   tester:run()
+   test:add(test)
 end
+tester:run()
+
