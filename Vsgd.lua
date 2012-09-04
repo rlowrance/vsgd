@@ -1,4 +1,4 @@
--- vgdLd.lua
+-- Vsgd.lua
 -- stochastic gradient descent using the Schaul-Zhang-LeCun procedure to
 -- approximate the optimal learning rate and learning rate decay using
 -- adaptive component-wise learning rates.
@@ -36,7 +36,8 @@ end
 --   state.c         : number > 0, factor used to overestimate variance
 
 -- where f is a function of no arguments that somehow selects a sample
--- and returns
+-- and returns 3 values:
+-- fx               : numer, value of f at the sample
 -- gradient(sample) : tensor, gradient of f at the sample
 -- hessdiag(sample) : tensor, the diagonal of the Hessian of f at the sample
 
@@ -51,26 +52,21 @@ end
 -- sequence  : {f(theta)}
 --             one entry table with the function value before the update
 
-function Vsgd:ld(opfunc3, theta, state)
+function Vsgd:ld(f, theta, state)
 
-   local trace = true
+   local trace = false
 
    if trace then
-      print('opfunc3', opfunc3)
+      print('f', f)
       print('theta', theta)
       print('state', state)
    end
 
    -- type and value check the arguments on first call only
 
-   local function assertIsTensor1D(x)
-      assert(string.match(torch.typename(x), 'torch%..*Tensor'))
-      assert(x:dim() == 1)
-   end
-
    if state.tau == nil then
       -- since first time called, type and value check the parameters
-      self:_typeAndValueCheck(opfunc3, theta, state)
+      self:_typeAndValueCheck(f, theta, state)
    end
    
    local n0 = state.nSamples
@@ -78,7 +74,7 @@ function Vsgd:ld(opfunc3, theta, state)
 
    -- initialize g, v, h and tau, if this has not already been done
    if state.g == nil then
-      self:_initializeState(opfunc3)
+      self:_initializeState(d, f, state)
    end
 
    -- perform update:
@@ -92,9 +88,8 @@ function Vsgd:ld(opfunc3, theta, state)
    -- 1. draw a sample: the function f does this on its own, so nothing to do
 
    -- 2. compute gradient and diagonal hessian
-   local gradient, hessdiag = opfunc3()
+   local fx, gradient, hessdiag = f()
    if trace then
-      print('at sample')
       print(' gradient', gradient)
       print(' hessdiag', hessdiag)
    end
@@ -126,8 +121,8 @@ function Vsgd:ld(opfunc3, theta, state)
    end
 
    -- 4. estimate new best learning rate
-   local gg = torch.dot(state.g, state.g)
-   local hv = torch.dot(state.h, state.v)
+   local gg = torch.cmul(state.g, state.g)
+   local hv = torch.cmul(state.h, state.v)
    state.eta = torch.cdiv(gg, hv)
    if trace then
       print('gg', gg)
@@ -138,11 +133,16 @@ function Vsgd:ld(opfunc3, theta, state)
    -- 5. take a stochastic gradient step to update the parameter
    if trace then
       print('theta before step', theta)
+      print('eta', state.eta)
+      print('gradient', gradient)
    end
-   theta = theta:add(-state.eta, gradient)
+
+   theta = theta - torch.cmul(state.eta, gradient)
+   --theta = theta:add(-state.eta, gradient)
+
    if trace then
       print('theta after step', theta)
-      halt()
+      --halt()
    end
 
       
@@ -154,37 +154,71 @@ function Vsgd:ld(opfunc3, theta, state)
       print('updated tau', state.tau)
    end
 
-   return theta, {f}
+   return theta, {fx}
 end -- ld
+
+--------------------------------------------------------------------------------
+-- printState
+--------------------------------------------------------------------------------
+
+-- nicely print the state fields
+function Vsgd:printState(state)
+   assert(state)
+
+   local function maybePrint(name, value)
+      if value == nil then return end
+      local formatter = ' %10s = %s'
+      if type(value) == 'number' then
+         print(string.format(formatter, name, tostring(value)))
+         return
+      end
+      -- assume value is a torch.Tensor
+      s = '['
+      for i = 1, value:size(1) do
+         if i ~= 1 then s = s .. ', ' end
+         s = s .. tostring(value[i])
+      end
+      s = s .. ']'
+      print(string.format(formatter, name, s))
+   end
+   
+   print('Vsgd state argument')
+   maybePrint('c', state.c)
+   maybePrint('epsilon', state.epsilon)
+   maybePrint('eta', state.eta)
+   maybePrint('g', state.g)
+   maybePrint('h', state.h)
+   maybePrint('nSamples', state.nSamples)
+   maybePrint('n0', state.n0)
+   maybePrint('tau', state.tau)
+   maybePrint('v', state.v)
+end -- printState
 
 --------------------------------------------------------------------------------
 -- _initializeState
 --------------------------------------------------------------------------------
 
 -- initalize g, v, h, tau
-function Vsgd:_initializeState(opfunc3)
+function Vsgd:_initializeState(d, f, state)
    local n0 = state.n0
    local c = state.c
    
-   self.state.tau = torch.Tensor(d):fill(n0)
+   state.tau = torch.Tensor(d):fill(n0)
    
    -- compute all i = 1,d values at once
    local sumGradients = torch.Tensor(d):fill(0)
    local sumVariances = torch.Tensor(d):fill(0)
    local sumHessdiags = torch.Tensor(d):fill(0)
    for j = 1, n0 do
-      local gradient, hessdiag = state.f()
+      local fx, gradient, hessdiag = f()
       
       if j == 1 then
          -- type check f's returned values only on the first time
-         assert(f)
-         assert(type(f) == 'number')
-         
          assert(gradient)
-         assertIsTensor1D(gradient)
+         self:_assertIsTensor1D(gradient)
          
          assert(hessdiag)
-         assertIsTensor1D(hessdiag)
+         self:_assertIsTensor1D(hessdiag)
       end
       
       sumGradients = torch.add(sumGradients, gradient)
@@ -200,9 +234,9 @@ function Vsgd:_initializeState(opfunc3)
       print('c', state.c)
    end
    
-   self.state.g = sumGradients / n0
-   self.state.v = (sumVariances / n0) * c
-   self.state.h = max(state.epsilon, (sumHessdiags / n0) * c)
+   state.g = sumGradients / n0
+   state.v = (sumVariances / n0) * c
+   state.h = self:_max(state.epsilon, (sumHessdiags / n0) * c)
    
    if trace then
       print('initialized values')
@@ -217,7 +251,7 @@ end -- _initializeState
 --------------------------------------------------------------------------------
 
 -- return component-wise maximum of scalar and Tensor
-function Vsg:_max(epsilon, t)
+function Vsgd:_max(epsilon, t)
    local n = t:size(1)
    local result = torch.Tensor(n)
    for i = 1, n do
@@ -226,19 +260,29 @@ function Vsg:_max(epsilon, t)
    return result
 end -- _max
 
+-------------------------------------------------------------------------------
+-- _assertIsTensor1D
+------------------------------------------------------------------------------- 
+
+function Vsgd:_assertIsTensor1D(x)
+   assert(string.match(torch.typename(x), 'torch%..*Tensor'))
+   assert(x:dim() == 1)
+end
+
+
 --------------------------------------------------------------------------------
 -- _typeAndValueCheck
 --------------------------------------------------------------------------------
 
 -- type and value check the parameters
-function Vsgd:_typeAndValueCheck(opfunc3, theta, state)
-   -- opfunc3 is a function
-   assert(opfunc3)
-   assert(type(opfunc3) == 'function')
+function Vsgd:_typeAndValueCheck(f, theta, state)
+   -- f is a function
+   assert(f)
+   assert(type(f) == 'function')
    
    -- theta is a 1D Tensor
    assert(theta)
-   assertIsTensor1D(theta)
+   self:_assertIsTensor1D(theta)
    assert(theta:dim() == 1)
    
    -- state is a table
