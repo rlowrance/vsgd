@@ -134,6 +134,13 @@ function Vsgd:ld(f, theta, state)
       print('hv') print(hv)
       print('eta') print(state.eta)
    end
+   -- replace any NaN values with zero
+   for i = 1, d do
+      if state.eta[i] ~= state.eta[i] then
+         -- the i-th coordinate is NaN
+         state.eta[i] = 0
+      end
+   end
 
    -- 5. take a stochastic gradient step to update the parameter
    if trace then
@@ -154,10 +161,21 @@ function Vsgd:ld(f, theta, state)
       
    -- 6. update memory size
 
+   state.priorTau = state.tau
    state.tau = 
       torch.cmul(one - torch.cdiv(gg, state.v), state.tau) + one
    if trace then
       print('updated tau') print(state.tau)
+   end
+   -- replace any NaN values with previous tau values
+   for i = 1, d do
+      if state.tau[i] ~= state.tau[i] then
+         -- the i-th coordinate is NaN
+         state.tau[i] = state.priorTau[i]
+         if trace then
+            print('correcting tau coordinate', i)
+         end
+      end
    end
 
    return theta, {fx}
