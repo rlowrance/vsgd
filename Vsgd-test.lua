@@ -1,6 +1,7 @@
 -- Vsgdd-test.lua
 -- unit test of Vsgd.lua
 
+require 'checkGradient'
 require 'Vsgd'
 
 test = {}
@@ -37,12 +38,7 @@ do
    local Heath = torch.class('Heath')
 
    function Heath:__init()
-      self._nextSampleIndex = 1
-      self._samples = torch.Tensor({{1, 1},
-                                   {2, 2},
-                                   {3, 3}})
-      self._nSamples = self._samples:size(1)
-      self._nDimensions = self._samples:size(2)
+      self._nDimensions = 2
    end
 
    function Heath:nDimensions()
@@ -53,22 +49,16 @@ do
       return self._nSamples
    end
 
-   -- return fx, df/dx, and df^2/dx^2
-   function Heath:run()
+   -- return fx, df/dx, and df^2/dx^2 at theta and a sample
+   -- however, there are no samples in the example
+   function Heath:run(theta)
+      assert(theta, 'no argument to Heath:run')
       if trace then
          print('\nHeath:run self', self)
       end
 
-      local sample = self._samples[self._nextSampleIndex]
-
-      if self._nextSampleIndex == self._nSamples then
-         self._nextSampleIndex = 1
-      else
-         self._nextSampleIndex = self._nextSampleIndex + 1
-      end
-
-      local x1 = sample[1]
-      local x2 = sample[2]
+      local x1 = theta[1]
+      local x2 = theta[2]
 
       local fx = 0.5 * x1 * x1 + 2.5 * x2 * x2
 
@@ -86,26 +76,27 @@ end
 
 function test.Heath() -- test Heath class
    local heath = Heath()
-   local function f()
-      return heath:run()
+   local function f(theta)
+      assert(theta)
+      return heath:run(theta)
    end
 
    local function check(expectedFx, 
                         expectedG1, expectedG2,
-                        j)
+                        theta)
       local trace = false
-      local actualFx, actualG, actualH = f()
+      local actualFx, actualG, actualH = f(theta)
       if trace then 
          print('check fx, g, h', actualFx, actualG, actualH)
       end
-      tester:asserteq(expectedFx, actualFx, 'fx j=' .. j)
+      tester:asserteq(expectedFx, actualFx, 'fx')
       assertEqTensor(actualG, expectedG1, expectedG2, 0)
       assertEqTensor(actualH, 1, 5, 0)
    end
 
-   check(3, 1, 5, 1)
-   check(12, 2, 10, 2)
-   check(27, 3, 15, 3)
+   check(3, 1, 5, torch.Tensor(2):fill(1))
+   check(12, 2, 10, torch.Tensor(2):fill(2))
+   check(0, 0, 0, torch.Tensor(2):fill(0))
 end
 
 
@@ -123,25 +114,25 @@ function test.heathTestKnownResults()
 
    state = {}
    state.epsilon = 1e-10
-   state.nSamples = heath:nSamples()
-   state.n0 = state.nSamples         -- init with all samples
-   state.c = 6
+   state.n0 = 2
+   state.c = 10
 
    -- initial starting point
-   local theta = torch.Tensor(d):fill(0.1)
-   if trace then print('state before call', state) end
-   local function f()
-      return heath:run()
+   local theta = torch.Tensor(d):fill(1)
+   if trace then print('state before call') print(state) end
+   local function f(theta)
+      assert(theta, 'no argument to f')
+      return heath:run(theta)
    end
    local theta, seq = vsgd:ld(f, theta, state)
    if trace then print('state after call', state) end
 
-   assertEqTensor(state.g, 1 + 2/3, 8 + 1/3)
-   assertEqTensor(state.v,  19.0,    475.0)
-   assertEqTensor(state.h,   4.3333,  21.6667)
-   assertEqTensor(state.eta, 0.0337,   0.0067)
-   assertEqTensor(state.tau, 3.5614,   3.5614)
-   assertEqTensor(theta,     0.0663,   0.0665)
+   assertEqTensor(state.g, 1, 5)
+   assertEqTensor(state.v,  5.5, 137.5)
+   assertEqTensor(state.h,  5.5, 27.5)
+   assertEqTensor(state.eta, 0.0331,   0.0066)
+   assertEqTensor(state.tau, 2.6364,   2.6364)
+   assertEqTensor(theta,     0.9669,   0.9670)
    tester:asserteq(1, #seq, '1 element')
    tester:asserteq(3, seq[1], 'value should be 3')
 end
@@ -152,11 +143,13 @@ function test.heathMinimizer()
    if trace then print('\n') end
 
    local heath = Heath()
-   local function f()
-      return heath:run()
+   local function f(theta)
+      assert(theta, 'f is missing theta')
+      return heath:run(theta)
    end
 
    local function minimize(startX1, startX2, n0, steps)
+      local trace = false
       assert(startX1)
       assert(startX2)
 
@@ -168,32 +161,32 @@ function test.heathMinimizer()
       else
          state.n0 = n0
       end
-      state.c = 6
+      state.c = 2
       
       -- attempt to minimize
       local d = heath:nDimensions()
       local theta = torch.Tensor(2)
       theta[1] = startX1
       theta[2] = startX2
-      print(string.format('\n%d theta [%f, %f]', 0, theta[1], theta[2]))
+      if trace then
+         print(string.format('\n%d theta [%f, %f]', 0, theta[1], theta[2]))
+      end
       local vsgd = Vsgd()
       steps = steps or 10
       for i = 1, steps do
          theta, seq = vsgd:ld(f, theta, state)
-         print(string.format('%d theta [%f, %f]', i, theta[1], theta[2]))
-         if i == 1 then
-            -- should be same as for test.heathTestKnownResults
-         assertEqTensor(theta, 0.0663, 0.0665) 
-         print('state after the first step')
-         vsgd:printState(state)
+         if trace then
+            print(string.format('%d theta [%f, %f] f(theta)= %f', 
+                                i, theta[1], theta[2], seq[1]))
          end
       end
-      assertEqTensor(theta, 0, 0)
+      assertEqTensor(theta, 0, 0, .01)
+      tester:assertlt(seq[1], 1e-3, 'less than 10^-3')
    end --minimize
 
-   minimize(0.1, 0.1) -- same starting point as for known results test
-   minimize(0.1, 0.1, 100, 30)
-   minimize(5.0, 1.0) -- as in Heath p. 277 using gradient descent
+   minimize(1, 1, 2, 50) -- same starting point as for known results test
+   minimize(0.1, 0.1, 2, 50)
+   minimize(100, -100, 2, 200 ) -- as in Heath p. 277 using gradient descent
 end
 
 --------------------------------------------------------------------------------
@@ -201,9 +194,9 @@ end
 --------------------------------------------------------------------------------
 
 do
-   local function rosenbrock(tensor)
-      local x = tensor[1]
-      local y = tensor[2]
+   local function rosenbrock(theta)
+      local x = theta[1]
+      local y = theta[2]
       
       local term1 = 1 - x
       local term2 = y - x * x
@@ -211,17 +204,12 @@ do
       return term1 * term1 + 100 * term2 * term2
    end
 
-   local d = 2
-   local nSamples = 100
-   rosenbrockSamples = torch.randn(nSamples, 2)
+   function rosenbrockOpfunc3(theta)
 
-   function rosenbrockOpfunc3(j)
-      assert(1 <= j and j <= rosenbrockSamples:size(1))
-      local tensor = rosenbrockSamples[j]
-      local x = tensor[1]
-      local y = tensor[2]
+      local x = theta[1]
+      local y = theta[2]
 
-      local f = rosenbrock(tensor)
+      local f = rosenbrock(theta)
 
       local d = 2
       local gradient = torch.Tensor(d)
@@ -231,14 +219,71 @@ do
       gradient[2] = 200 * (y - x * x)
 
       local hessdiag = torch.Tensor(d)
-      hessdiag[1] = 
-         2 * (1 - x) * (-1) * (-1) + 
-         200 * ((y - x * x) * (-2) + (-2 * x) * (y - x* x) * (-2 * x))
-      hessdiag[2] = 200 * (y - x * x)
+      hessdiag[1] = 1 - 400 * y + 1200 * x * x
+      hessdiag[2] = 200 
 
       return f, gradient, hessdiag
    end
 end
+
+function test.rosenbrock()
+   local trace = false
+
+   -- check the gradient at a random point
+   local point = torch.rand(2)
+   local tolerance = 1e-6
+   local verbose = trace
+   local d, dy, dh = checkGradient(rosenbrockOpfunc3, point, tolerance, verbose)
+   if trace then
+      print('check gradient results')
+      print(' d', d)
+      print(' gradient from op func', dy)
+      print(' computed gradient for pertubation', dh)
+   end
+   tester:assertlt(math.abs(d), tolerance, 'norm of dy - dh')
+
+
+
+   local function check(theta, expectedF, expectedG, expectedHd)
+      local actualF, actualG, actualHd = rosenbrockOpfunc3(theta)
+      local tol = 1e-5
+      if trace then
+         print('theta') print(theta)
+         print('expectedF') print(expectedF)
+         print('actualF') print(actualF)
+         print('expectedG') print(expectedG)
+         print('actualG') print(actualG)
+         print('expectedHd') print(expectedHd)
+         print('actualHd') print(actualHd)
+      end
+
+      tester:assertlt(math.abs(actualF - expectedF), tol, 'f')
+      tester:assertlt(torch.norm(actualG - expectedG), tol, 'g')
+      tester:assertlt(torch.norm(actualHd - expectedHd), tol, 'hd')
+   end
+
+   local function makeTensor(x, y)
+      local result = torch.Tensor(2)
+      result[1] = x
+      result[2] = y
+      return result
+   end
+
+   check(makeTensor(0,0),
+         1,
+         makeTensor(-2,0),
+         makeTensor(1, 200))
+   check(makeTensor(1,1),
+         0,
+         makeTensor(0,0),
+         makeTensor(801,200))
+   check(makeTensor(2,3),
+         101,
+         makeTensor(802,-200),
+         makeTensor(3601,200))
+
+end
+   
 
       
 
@@ -248,22 +293,29 @@ function test.rosenbrockMinimizer()
    if trace then print('\n') end
    
    state = {}
-   state.epsilon = 1e10 -- should not play a role
-   state.nSamples = heathSamples:size(1)
-   state.n0 = state.nSamples
-   state.c = 1
+   state.epsilon = 1e-10 -- should not play a role
+   state.n0 = 1
+   state.c = 20
 
    -- attempt to minimize
-   local d = heathSamples:size(2)
-   local theta = torch.randn(d)
+   local d = 2
+   -- Cannot start from the minimizer!
+   --local theta = torch.Tensor(d):fill(1)
+   local theta = torch.Tensor(d):fill(0)
+   vsgd = Vsgd()
    for i = 1, 25 do
-      theta, seq = vsgdLd(rosenbrockOpfunc3, theta, state)
-      if false then
+      theta, seq = vsgd:ld(rosenbrockOpfunc3, theta, state)
+      if theta[1] ~= theta[1] or theta[2] ~= theta[2] then
+         print('theta', theta)
+         error('theta is NaN')
+      end
+      if trace then
          print('theta', theta)
          print('seq', seq)
          print('state', state)
       end
-      print(string.format('%d theta [%f, %f]', i, theta[1], theta[2]))
+      print(string.format('%d theta [%f, %f] f(theta) = %f', 
+                          i, theta[1], theta[2]. seq[1]))
    end
    assertEqTensor(theta, 1, 1)
 end
@@ -275,7 +327,9 @@ end
 if true then
    --tester:add(test.Heath, 'test.Heath')
    --tester:add(test.heathTestKnownResults, 'test.heathTestKnownResults')
-   tester:add(test.heathMinimizer, 'test.heathMinimizer')
+   --tester:add(test.heathMinimizer, 'test.heathMinimizer')
+   --tester:add(test.rosenbrock, 'test.rosenbrock')
+   tester:add(test.rosenbrockMinimizer, 'test.rosenbrockMinimizer')
 else
    test:add(test)
 end

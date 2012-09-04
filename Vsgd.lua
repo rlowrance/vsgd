@@ -26,40 +26,41 @@ end
 -- take one iteration step from current or initial position using
 -- the local variance and local diagonal Hessian estimates
 -- ARGS:
--- f       : a function defined below
+-- opfunc3 : a function defined below
 -- theta   : 1D Tensor, initial starting point
 -- state   : table with initial values, mutated by this function
 --   state.epsilon   : number > 0 ?
---   state.nSamples  : number >= 1, number of samples
 --   state.n0        : number >= 1, number of sample to use to kick start
---                     the kick start samples are 1, 2, ..., state.n0
 --   state.c         : number > 0, factor used to overestimate variance
 
--- where f is a function of no arguments that somehow selects a sample
+-- where opfunc3 is a function of the parameters and possible an implicit
+-- sample that is somehow selects
 -- and returns 3 values:
--- fx               : numer, value of f at the sample
--- gradient(sample) : tensor, gradient of f at the sample
--- hessdiag(sample) : tensor, the diagonal of the Hessian of f at the sample
+-- fx              : numer, value of f at theta and the sample
+-- gradient(theta) : tensor, gradient of f wrt theta at theta and the sample
+-- hessdiag(theta) : tensor, the diagonal of the Hessian of f at theta and
+--                   the sample
 
 -- The first n0 calls to f should evaluate f at the n0 initial samples
 
 -- According to the paper describing the algorithm,
 -- The initSamples and c parameters "have only transient initialization
--- effects on the algorithm, and thus do not need to be tuned."
+-- effects on the algorithm, and thus do not need to be tuned." However,
+-- experiments show that too low a value for c can lead to NaN results.
 
 -- RETURNS:
 -- thetaStar : new theta vector (after one optimization step)
--- sequence  : {f(theta)}
+-- sequence  : {opfunc(theta)}
 --             one entry table with the function value before the update
 
 function Vsgd:ld(f, theta, state)
 
-   local trace = false
+   local trace = true
 
    if trace then
       print('f', f)
-      print('theta', theta)
-      print('state', state)
+      print('theta') print(theta)
+      print('state') print( state)
    end
 
    -- type and value check the arguments on first call only
@@ -69,12 +70,16 @@ function Vsgd:ld(f, theta, state)
       self:_typeAndValueCheck(f, theta, state)
    end
    
-   local n0 = state.nSamples
+   local n0 = state.n0
    local d = theta:size(1) 
 
    -- initialize g, v, h and tau, if this has not already been done
-   if state.g == nil then
-      self:_initializeState(d, f, state)
+   if state.tau == nil then
+      self:_initializeState(f, state, theta)
+      if trace then
+         print('state after initialization')
+         self:printState(state)
+      end
    end
 
    -- perform update:
@@ -88,10 +93,10 @@ function Vsgd:ld(f, theta, state)
    -- 1. draw a sample: the function f does this on its own, so nothing to do
 
    -- 2. compute gradient and diagonal hessian
-   local fx, gradient, hessdiag = f()
+   local fx, gradient, hessdiag = f(theta)
    if trace then
-      print(' gradient', gradient)
-      print(' hessdiag', hessdiag)
+      print(' gradient') print(gradient)
+      print(' hessdiag') print(hessdiag)
    end
 
    -- 3. update moving average of g, v, h
@@ -115,9 +120,9 @@ function Vsgd:ld(f, theta, state)
 
    if trace then
       print('updated moving averages')
-      print('g', state.g)
-      print('v', state.v)
-      print('h', state.h)
+      print('g') print(state.g)
+      print('v') print(state.v)
+      print('h') print(state.h)
    end
 
    -- 4. estimate new best learning rate
@@ -125,23 +130,24 @@ function Vsgd:ld(f, theta, state)
    local hv = torch.cmul(state.h, state.v)
    state.eta = torch.cdiv(gg, hv)
    if trace then
-      print('gg', gg)
-      print('hv', hv)
-      print('eta', state.eta)
+      print('gg') print(gg)
+      print('hv') print(hv)
+      print('eta') print(state.eta)
    end
 
    -- 5. take a stochastic gradient step to update the parameter
    if trace then
-      print('theta before step', theta)
-      print('eta', state.eta)
-      print('gradient', gradient)
+      print('theta before step') print(theta)
+      print('eta') print(state.eta)
+      print('gradient') print( gradient)
    end
 
    theta = theta - torch.cmul(state.eta, gradient)
    --theta = theta:add(-state.eta, gradient)
 
    if trace then
-      print('theta after step', theta)
+      print('theta after step') print(theta)
+      print('tau before update') print(state.tau)
       --halt()
    end
 
@@ -151,7 +157,7 @@ function Vsgd:ld(f, theta, state)
    state.tau = 
       torch.cmul(one - torch.cdiv(gg, state.v), state.tau) + one
    if trace then
-      print('updated tau', state.tau)
+      print('updated tau') print(state.tau)
    end
 
    return theta, {fx}
@@ -188,7 +194,6 @@ function Vsgd:printState(state)
    maybePrint('eta', state.eta)
    maybePrint('g', state.g)
    maybePrint('h', state.h)
-   maybePrint('nSamples', state.nSamples)
    maybePrint('n0', state.n0)
    maybePrint('tau', state.tau)
    maybePrint('v', state.v)
@@ -199,10 +204,15 @@ end -- printState
 --------------------------------------------------------------------------------
 
 -- initalize g, v, h, tau
-function Vsgd:_initializeState(d, f, state)
-   local n0 = state.n0
+function Vsgd:_initializeState(f, state, theta)
+   assert(f)
+   assert(state)
+   assert(theta)
+
    local c = state.c
-   
+   local n0 = state.n0
+   local d = theta:size(1)
+
    state.tau = torch.Tensor(d):fill(n0)
    
    -- compute all i = 1,d values at once
@@ -210,7 +220,8 @@ function Vsgd:_initializeState(d, f, state)
    local sumVariances = torch.Tensor(d):fill(0)
    local sumHessdiags = torch.Tensor(d):fill(0)
    for j = 1, n0 do
-      local fx, gradient, hessdiag = f()
+      -- f must be written to iterate over the first n0 samples
+      local fx, gradient, hessdiag = f(theta)
       
       if j == 1 then
          -- type check f's returned values only on the first time
@@ -230,7 +241,7 @@ function Vsgd:_initializeState(d, f, state)
       print('sumGradients', sumGradients)
       print('sumVariances', sumVariances)
       print('sumHessdiags', sumHessdiags)
-      print('n0', n0)
+      print('n0', state.n0)
       print('c', state.c)
    end
    
@@ -291,11 +302,6 @@ function Vsgd:_typeAndValueCheck(f, theta, state)
    -- state.eplison is a positive number
    assert(state.epsilon)
    assert(state.epsilon > 0)
-   
-   -- state.nSamples is a positive integer
-   assert(state.nSamples)
-   assert(state.nSamples >= 1)
-   assert(math.floor(state.nSamples) == state.nSamples) -- is integer
    
    -- state.n0 is a positive integer
    assert(state.n0)
